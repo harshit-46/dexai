@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Eye, EyeOff, Sparkles, Code2, Brain, Mail, Lock, AlertCircle } from "lucide-react";
 import aiCodingBackground from "../../assets/cover.png";
 
