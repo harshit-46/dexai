@@ -1,0 +1,321 @@
+import requests
+import json
+import os
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+import time
+
+class GoogleSearchAPI:
+    """Google Custom Search API wrapper"""
+    
+    def __init__(self, api_key: str, cse_id: str):
+        self.api_key = api_key
+        self.cse_id = cse_id
+        self.base_url = "https://www.googleapis.com/customsearch/v1"
+    
+    def search(self, query: str, num_results: int = 5) -> Optional[Dict]:
+        """
+        Search using Google Custom Search API
+        
+        Args:
+            query: Search query string
+            num_results: Number of results to return (max 10)
+            
+        Returns:
+            Search results dictionary or None if error
+        """
+        params = {
+            'key': self.api_key,
+            'cx': self.cse_id,
+            'q': query,
+            'num': min(num_results, 10)  # Google API max is 10
+        }
+        
+        try:
+            print(f"🔍 Searching for: {query}")
+            response = requests.get(self.base_url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            if 'items' in data:
+                print(f"✅ Found {len(data['items'])} results")
+                return data
+            else:
+                print("⚠️ No search results found")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Search API error: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON decode error: {e}")
+            return None
+
+class MistralAPI:
+    """Mistral API wrapper"""
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://api.mistral.ai/v1/chat/completions"
+        self.headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+    
+    def chat(self, 
+             messages: List[Dict[str, str]], 
+             model: str = "mistral-small-latest",
+             max_tokens: int = 1000,
+             temperature: float = 0.7) -> Optional[str]:
+        """
+        Send chat completion request to Mistral API
+        
+        Args:
+            messages: List of message dictionaries
+            model: Mistral model to use
+            max_tokens: Maximum tokens in response
+            temperature: Response creativity (0-1)
+            
+        Returns:
+            Response text or None if error
+        """
+        data = {
+            'model': model,
+            'messages': messages,
+            'max_tokens': max_tokens,
+            'temperature': temperature
+        }
+        
+        try:
+            print("🤖 Getting AI response...")
+            response = requests.post(
+                self.base_url, 
+                headers=self.headers, 
+                json=data,
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            content = result['choices'][0]['message']['content']
+            print("✅ AI response received")
+            return content
+            
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Mistral API error: {e}")
+            return None
+        except (KeyError, IndexError) as e:
+            print(f"❌ Response parsing error: {e}")
+            return None
+
+class EnhancedAICompanion:
+    """AI Companion with Google Search integration"""
+    
+    def __init__(self, mistral_api_key: str, google_api_key: str, google_cse_id: str):
+        self.mistral = MistralAPI(mistral_api_key)
+        self.google_search = GoogleSearchAPI(google_api_key, google_cse_id)
+        self.search_cache = {}
+        self.cache_duration = 1800  # 30 minutes
+    
+    def _should_search(self, query: str) -> bool:
+        """
+        Determine if query needs web search based on keywords
+        """
+        search_keywords = [
+            'latest', 'recent', 'new', '2024', '2025', 'current', 'today',
+            'trending', 'update', 'release', 'version', 'best practices',
+            'comparison', 'vs', 'versus', 'review', 'guide', 'tutorial'
+        ]
+        
+        query_lower = query.lower()
+        return any(keyword in query_lower for keyword in search_keywords)
+    
+    def _create_search_query(self, user_question: str) -> str:
+        """
+        Create optimized search query from user question
+        """
+        # Add current year for recent results
+        current_year = datetime.now().year
+        
+        # Common optimizations
+        search_terms = user_question
+        
+        if 'best' in user_question.lower():
+            search_terms += f" {current_year}"
+        
+        if any(word in user_question.lower() for word in ['how to', 'tutorial', 'guide']):
+            search_terms += " tutorial guide"
+            
+        return search_terms
+    
+    def _format_search_results(self, search_results: Dict) -> str:
+        """
+        Format search results into readable context for AI
+        """
+        if not search_results or 'items' not in search_results:
+            return ""
+        
+        formatted = "🌐 Recent Web Information:\n\n"
+        
+        for i, item in enumerate(search_results['items'][:5], 1):
+            title = item.get('title', 'No title')
+            snippet = item.get('snippet', 'No description')
+            link = item.get('link', '')
+            
+            formatted += f"Source {i}: {title}\n"
+            formatted += f"Info: {snippet}\n"
+            formatted += f"URL: {link}\n\n"
+        
+        formatted += "---\n\n"
+        return formatted
+    
+    def _get_cached_search(self, query: str) -> Optional[str]:
+        """Get cached search results if available and not expired"""
+        if query in self.search_cache:
+            cached_data = self.search_cache[query]
+            if time.time() - cached_data['timestamp'] < self.cache_duration:
+                print("📋 Using cached search results")
+                return cached_data['results']
+        return None
+    
+    def _cache_search_results(self, query: str, results: str):
+        """Cache search results"""
+        self.search_cache[query] = {
+            'results': results,
+            'timestamp': time.time()
+        }
+    
+    def ask(self, 
+            question: str, 
+            enable_search: bool = True,
+            search_results_count: int = 5) -> str:
+        """
+        Main method to ask question with optional web search
+        
+        Args:
+            question: User's question
+            enable_search: Whether to use web search
+            search_results_count: Number of search results to use
+            
+        Returns:
+            AI response string
+        """
+        print(f"\n💬 Question: {question}")
+        print("="*50)
+        
+        context = ""
+        
+        # Decide if we should search
+        should_search = enable_search and self._should_search(question)
+        
+        if should_search:
+            # Check cache first
+            search_query = self._create_search_query(question)
+            cached_results = self._get_cached_search(search_query)
+            
+            if cached_results:
+                context = cached_results
+            else:
+                # Perform fresh search
+                search_results = self.google_search.search(search_query, search_results_count)
+                if search_results:
+                    context = self._format_search_results(search_results)
+                    self._cache_search_results(search_query, context)
+        
+        # Build the prompt
+        if context:
+            messages = [{
+                'role': 'user',
+                'content': f"""{context}
+
+Based on the above recent web information and your knowledge, please answer this question comprehensively:
+
+{question}
+
+Please:
+1. Use both the web information and your expertise
+2. Mention if information is recent/current
+3. Provide practical, actionable advice
+4. Be specific and detailed"""
+            }]
+        else:
+            messages = [{
+                'role': 'user',
+                'content': f"""Please answer this question using your knowledge and expertise:
+
+{question}
+
+Provide a comprehensive, practical, and detailed response."""
+            }]
+        
+        # Get AI response
+        response = self.mistral.chat(messages)
+        
+        if response:
+            print("\n🎯 Response:")
+            print("-" * 30)
+            return response
+        else:
+            return "❌ Sorry, I couldn't generate a response. Please try again."
+
+def main():
+    """Example usage of the Enhanced AI Companion"""
+    
+    # Configuration - Replace with your actual API keys
+    config = {
+        'mistral_api_key': 'YOUR_MISTRAL_API_KEY',
+        'google_api_key': 'YOUR_GOOGLE_API_KEY',
+        'google_cse_id': 'YOUR_GOOGLE_CSE_ID'
+    }
+    
+    # You can also load from environment variables
+    # config = {
+    #     'mistral_api_key': os.getenv('MISTRAL_API_KEY'),
+    #     'google_api_key': os.getenv('GOOGLE_API_KEY'),
+    #     'google_cse_id': os.getenv('GOOGLE_CSE_ID')
+    # }
+    
+    # Initialize the AI Companion
+    ai_companion = EnhancedAICompanion(**config)
+    
+    # Example questions
+    test_questions = [
+        "What are the best Python frameworks for web development in 2024?",
+        "How do I optimize React performance?",
+        "Latest JavaScript ES2024 features",
+        "Best practices for API security",
+        "What is machine learning?",  # This won't trigger search
+    ]
+    
+    print("🚀 Enhanced AI Companion with Google Search Integration")
+    print("=" * 60)
+    
+    for question in test_questions:
+        try:
+            response = ai_companion.ask(question)
+            print(response)
+            print("\n" + "="*60 + "\n")
+            time.sleep(1)  # Be nice to APIs
+        except Exception as e:
+            print(f"Error processing question: {e}")
+    
+    # Interactive mode
+    print("\n🎮 Interactive Mode (type 'quit' to exit):")
+    while True:
+        try:
+            user_input = input("\n💭 Your question: ").strip()
+            if user_input.lower() in ['quit', 'exit', 'bye']:
+                print("👋 Goodbye!")
+                break
+            
+            if user_input:
+                response = ai_companion.ask(user_input)
+                print(f"\n🤖 {response}")
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ Error: {e}")
+
+if __name__ == "__main__":
+    main()
